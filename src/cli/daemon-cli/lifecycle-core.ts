@@ -15,6 +15,26 @@ type DaemonLifecycleOptions = {
   json?: boolean;
 };
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
+
+function isExpectedNotLoadedStartError(err: unknown): boolean {
+  const msg = errorMessage(err).toLowerCase();
+  return (
+    msg.includes("not loaded") ||
+    msg.includes("not installed") ||
+    msg.includes("unit not found") ||
+    msg.includes("plist not found") ||
+    msg.includes("could not find service") ||
+    msg.includes("no such process") ||
+    msg.includes("not found")
+  );
+}
+
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (process.platform !== "linux") {
     return hints;
@@ -152,15 +172,20 @@ export async function runServiceStart(params: {
   if (!loaded) {
     try {
       await params.service.start({ env: process.env, stdout });
-    } catch {
-      await handleServiceNotLoaded({
-        serviceNoun: params.serviceNoun,
-        service: params.service,
-        loaded,
-        renderStartHints: params.renderStartHints,
-        json,
-        emit,
-      });
+    } catch (err) {
+      if (isExpectedNotLoadedStartError(err)) {
+        await handleServiceNotLoaded({
+          serviceNoun: params.serviceNoun,
+          service: params.service,
+          loaded,
+          renderStartHints: params.renderStartHints,
+          json,
+          emit,
+        });
+        return;
+      }
+      const hints = params.renderStartHints();
+      fail(`${params.serviceNoun} start failed: ${errorMessage(err)}`, hints);
       return;
     }
   } else {
