@@ -46,8 +46,8 @@ enum GatewayLaunchAgentManager {
     }
 
     static func isLoaded() async -> Bool {
-        guard let loaded = await self.readDaemonLoaded() else { return false }
-        return loaded
+        guard let state = await self.readDaemonServiceState() else { return false }
+        return state.loaded
     }
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
@@ -63,10 +63,13 @@ enum GatewayLaunchAgentManager {
 
         if enabled {
             self.logger.info("launchd enable requested via CLI port=\(port)")
-            let loaded = await self.readDaemonLoaded() == true
+            let serviceState = await self.readDaemonServiceState()
+            let loaded = serviceState?.loaded == true
+            let running = serviceState?.running == true
             let snapshot = self.launchdConfigSnapshot()
             let plan = self.enableCommandPlan(
                 isAlreadyLoaded: loaded,
+                isRunning: running,
                 snapshot: snapshot,
                 desiredPort: port,
                 desiredRuntime: "node")
@@ -142,16 +145,33 @@ enum GatewayLaunchAgentManager {
 
     static func enableCommandPlan(
         isAlreadyLoaded: Bool,
+        isRunning: Bool = false,
         snapshot: LaunchAgentPlistSnapshot? = nil,
         desiredPort: Int,
         desiredRuntime: String = "node") -> [[String]]
     {
         if isAlreadyLoaded {
-            if self.loadedServiceMatchesDesiredConfig(
+            let matchesDesiredConfig = self.loadedServiceMatchesDesiredConfig(
                 snapshot: snapshot,
                 desiredPort: desiredPort,
                 desiredRuntime: desiredRuntime)
-            {
+            if !isRunning {
+                if matchesDesiredConfig {
+                    // launchd job is registered with matching config but process is down;
+                    // recover by starting first.
+                    return [
+                        ["start"],
+                        ["install", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+                        ["install", "--force", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+                    ]
+                }
+                // Loaded but stale/unknown config: reinstall first so start doesn't resurrect old args.
+                return [
+                    ["install", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+                    ["install", "--force", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+                ]
+            }
+            if matchesDesiredConfig {
                 return []
             }
             // Service is loaded but stale (or unknown). Reinstall without restart-first so args are reapplied.
@@ -245,7 +265,12 @@ enum GatewayLaunchAgentManager {
 }
 
 extension GatewayLaunchAgentManager {
-    private static func readDaemonLoaded() async -> Bool? {
+    private struct DaemonServiceState {
+        let loaded: Bool
+        let running: Bool
+    }
+
+    private static func readDaemonServiceState() async -> DaemonServiceState? {
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
             timeout: 15,
@@ -258,7 +283,12 @@ extension GatewayLaunchAgentManager {
         else {
             return nil
         }
-        return loaded
+        let runtime = service["runtime"] as? [String: Any]
+        let status = (runtime?["status"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let hasPid = runtime?["pid"] as? Int != nil
+        let running = status == "running" || hasPid
+        return DaemonServiceState(loaded: loaded, running: running)
     }
 
     private struct CommandResult {
