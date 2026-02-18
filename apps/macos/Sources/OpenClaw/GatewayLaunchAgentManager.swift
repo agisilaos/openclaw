@@ -64,7 +64,12 @@ enum GatewayLaunchAgentManager {
         if enabled {
             self.logger.info("launchd enable requested via CLI port=\(port)")
             let loaded = await self.readDaemonLoaded() == true
-            let plan = self.enableCommandPlan(isAlreadyLoaded: loaded, port: port)
+            let snapshot = loaded ? self.launchdConfigSnapshot() : nil
+            let plan = self.enableCommandPlan(
+                isAlreadyLoaded: loaded,
+                snapshot: snapshot,
+                desiredPort: port,
+                desiredRuntime: "node")
             if plan.isEmpty {
                 self.logger.info("launchd already loaded; skipping enable")
                 return nil
@@ -120,13 +125,55 @@ enum GatewayLaunchAgentManager {
         return LogLocator.launchdGatewayLogPath
     }
 
-    static func enableCommandPlan(isAlreadyLoaded: Bool, port: Int) -> [[String]] {
-        guard !isAlreadyLoaded else { return [] }
+    static func enableCommandPlan(
+        isAlreadyLoaded: Bool,
+        snapshot: LaunchAgentPlistSnapshot? = nil,
+        desiredPort: Int,
+        desiredRuntime: String = "node") -> [[String]]
+    {
+        if isAlreadyLoaded {
+            if self.loadedServiceMatchesDesiredConfig(
+                snapshot: snapshot,
+                desiredPort: desiredPort,
+                desiredRuntime: desiredRuntime)
+            {
+                return []
+            }
+            // Service is loaded but stale (or unknown). Reinstall without restart-first so args are reapplied.
+            return [
+                ["install", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+                ["install", "--force", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+            ]
+        }
+
         return [
             ["start"],
-            ["install", "--port", "\(port)", "--runtime", "node"],
-            ["install", "--force", "--port", "\(port)", "--runtime", "node"],
+            ["install", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+            ["install", "--force", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
         ]
+    }
+
+    private static func loadedServiceMatchesDesiredConfig(
+        snapshot: LaunchAgentPlistSnapshot?,
+        desiredPort: Int,
+        desiredRuntime: String) -> Bool
+    {
+        guard let snapshot else { return false }
+        guard snapshot.port == desiredPort else { return false }
+        guard let runtime = self.runtimeName(from: snapshot.programArguments) else { return false }
+        return runtime == desiredRuntime
+    }
+
+    private static func runtimeName(from programArguments: [String]) -> String? {
+        guard let executable = programArguments.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !executable.isEmpty
+        else {
+            return nil
+        }
+        let base = URL(fileURLWithPath: executable).lastPathComponent.lowercased()
+        if base == "node" || base == "node.exe" { return "node" }
+        if base == "bun" || base == "bun.exe" { return "bun" }
+        return nil
     }
 }
 

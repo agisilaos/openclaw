@@ -39,13 +39,49 @@ import Testing
         #expect(snapshot.bind == nil)
     }
 
-    @Test func enableCommandPlanSkipsWhenAlreadyLoaded() {
-        let plan = GatewayLaunchAgentManager.enableCommandPlan(isAlreadyLoaded: true, port: 18789)
+    @Test func enableCommandPlanSkipsWhenAlreadyLoadedAndConfigMatches() {
+        let snapshot = LaunchAgentPlistSnapshot(
+            programArguments: ["/usr/local/bin/node", "/path/to/dist/index.js", "gateway", "--port", "18789"],
+            environment: [:],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: 18789,
+            bind: nil,
+            token: nil,
+            password: nil)
+        let plan = GatewayLaunchAgentManager.enableCommandPlan(
+            isAlreadyLoaded: true,
+            snapshot: snapshot,
+            desiredPort: 18789,
+            desiredRuntime: "node")
         #expect(plan.isEmpty)
     }
 
+    @Test func enableCommandPlanRepairsLoadedServiceWhenPortChanged() {
+        let snapshot = LaunchAgentPlistSnapshot(
+            programArguments: ["/usr/local/bin/node", "/path/to/dist/index.js", "gateway", "--port", "9999"],
+            environment: [:],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: 9999,
+            bind: nil,
+            token: nil,
+            password: nil)
+        let plan = GatewayLaunchAgentManager.enableCommandPlan(
+            isAlreadyLoaded: true,
+            snapshot: snapshot,
+            desiredPort: 18789,
+            desiredRuntime: "node")
+        #expect(plan.count == 2)
+        #expect(plan[0] == ["install", "--port", "18789", "--runtime", "node"])
+        #expect(plan[1] == ["install", "--force", "--port", "18789", "--runtime", "node"])
+    }
+
     @Test func enableCommandPlanPrefersStartThenInstallThenForceInstall() {
-        let plan = GatewayLaunchAgentManager.enableCommandPlan(isAlreadyLoaded: false, port: 18789)
+        let plan = GatewayLaunchAgentManager.enableCommandPlan(
+            isAlreadyLoaded: false,
+            desiredPort: 18789,
+            desiredRuntime: "node")
         #expect(plan.count == 3)
         #expect(plan[0] == ["start"])
         #expect(plan[1] == ["install", "--port", "18789", "--runtime", "node"])
