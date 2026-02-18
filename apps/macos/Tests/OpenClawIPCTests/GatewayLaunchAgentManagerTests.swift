@@ -38,4 +38,17 @@ import Testing
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
     }
+
+    @Test func enableCommandPlanSkipsWhenAlreadyLoaded() {
+        let plan = GatewayLaunchAgentManager.enableCommandPlan(isAlreadyLoaded: true, port: 18789)
+        #expect(plan.isEmpty)
+    }
+
+    @Test func enableCommandPlanPrefersStartThenInstallThenForceInstall() {
+        let plan = GatewayLaunchAgentManager.enableCommandPlan(isAlreadyLoaded: false, port: 18789)
+        #expect(plan.count == 3)
+        #expect(plan[0] == ["start"])
+        #expect(plan[1] == ["install", "--port", "18789", "--runtime", "node"])
+        #expect(plan[2] == ["install", "--force", "--port", "18789", "--runtime", "node"])
+    }
 }

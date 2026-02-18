@@ -63,14 +63,34 @@ enum GatewayLaunchAgentManager {
 
         if enabled {
             self.logger.info("launchd enable requested via CLI port=\(port)")
-            return await self.runDaemonCommand([
-                "install",
-                "--force",
-                "--port",
-                "\(port)",
-                "--runtime",
-                "node",
-            ])
+            let loaded = await self.readDaemonLoaded() == true
+            let plan = self.enableCommandPlan(isAlreadyLoaded: loaded, port: port)
+            if plan.isEmpty {
+                self.logger.info("launchd already loaded; skipping enable")
+                return nil
+            }
+
+            // Prefer start over reinstall so we avoid rewriting launchd/config state
+            // on every app launch.
+            for (index, command) in plan.enumerated() {
+                let isLast = index == plan.count - 1
+                if isLast {
+                    return await self.runDaemonCommand(command, timeout: 20)
+                }
+                let result = await self.runDaemonCommandResult(command, timeout: 20, quiet: true)
+                if result.success {
+                    return nil
+                }
+                let message = result.message ?? "unknown error"
+                if index == 0 {
+                    self.logger.warning(
+                        "launchd start failed (\(message, privacy: .public)); attempting install")
+                } else {
+                    self.logger.warning(
+                        "launchd install failed (\(message, privacy: .public)); attempting forced install")
+                }
+            }
+            return nil
         }
 
         self.logger.info("launchd disable requested via CLI")
@@ -98,6 +118,15 @@ enum GatewayLaunchAgentManager {
             return stderr
         }
         return LogLocator.launchdGatewayLogPath
+    }
+
+    static func enableCommandPlan(isAlreadyLoaded: Bool, port: Int) -> [[String]] {
+        guard !isAlreadyLoaded else { return [] }
+        return [
+            ["start"],
+            ["install", "--port", "\(port)", "--runtime", "node"],
+            ["install", "--force", "--port", "\(port)", "--runtime", "node"],
+        ]
     }
 }
 
